@@ -58,7 +58,9 @@ func consume(ctx context.Context, client *MinistreamClient, streamUUID uuid.UUID
 
 	consumerHandler := NewConsumerHandlerDemo(client, cptRecordsToSend)
 	consumer := CreateConsumer(ctx, streamUUID, consumerHandler)
-	consumer.Run(ctx)
+	if err := consumer.Run(ctx); err != nil {
+		logger.Printf("Consumer error (%s)\n", err.Error())
+	}
 }
 
 func createClient(ctx context.Context) *MinistreamClient {

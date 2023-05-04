@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"strings"
 	"time"
@@ -73,7 +72,7 @@ func (c *MinistreamClient) Disconnect() {
 }
 
 func (c *MinistreamClient) Authenticate(ctx context.Context) *APIError {
-	if c.auth.enabled == false || c.auth.creds == nil {
+	if !c.auth.enabled || c.auth.creds == nil {
 		c.auth.jwt = nil
 		return nil
 	}
@@ -253,7 +252,7 @@ func CallWebAPI[T any](
 		return resp, &APIError{Message: "rate limiter", Details: resp.Status, Code: ErrorTooManyRequests}
 	}
 
-	body, err3 := ioutil.ReadAll(resp.Body)
+	body, err3 := io.ReadAll(resp.Body)
 	if err3 != nil {
 		return resp, APIErrorFromError(err3)
 	}

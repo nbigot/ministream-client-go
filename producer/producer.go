@@ -113,7 +113,8 @@ func (p *StreamProducer) Run(ctx context.Context) error {
 				{
 					// last chance to send pending records
 					p.FillRecordsBufferFromQueue()
-					ctxShutdown, _ := context.WithTimeout(ctx, p.ShutdownTimeout)
+					ctxShutdown, ctxCancelFunc := context.WithTimeout(ctx, p.ShutdownTimeout)
+					defer ctxCancelFunc()
 					p.SendBatchRecords(ctxShutdown)
 					// all remaining records in the queue whill be lost
 					p.RecordsQueue.Clear()

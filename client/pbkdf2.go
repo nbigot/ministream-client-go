@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/rand"
 	"net/http"
 	"time"
@@ -49,7 +49,7 @@ func (c *MinistreamClient) Pbkdf2(ctx context.Context, r *Pbkdf2Request) (*Pbkdf
 		return nil, fmt.Errorf("failed")
 	}
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
