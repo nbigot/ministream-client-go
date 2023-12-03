@@ -70,6 +70,7 @@ func createClient(ctx context.Context) *MinistreamClient {
 		&Credentials{Login: "benchmark", Password: "benchmark"},
 		true,
 		10*time.Second,
+		nil, // put 'logger' there if you want to see all http requests in the logs
 	)
 }
 
@@ -87,6 +88,8 @@ func produceAndConsume(ctx context.Context) {
 	logger.Printf("Created stream: %s\n", streamUUID.String())
 
 	wg.Add(2)
+
+	// produce
 	go func() {
 		defer wg.Done()
 		producingStartTime := time.Now()
@@ -97,6 +100,8 @@ func produceAndConsume(ctx context.Context) {
 		producingDuration := time.Since(producingStartTime)
 		logger.Printf("Stop producing... (took %s)\n", producingDuration)
 	}()
+
+	// consume
 	go func() {
 		defer wg.Done()
 		consumingStartTime := time.Now()

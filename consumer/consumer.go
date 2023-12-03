@@ -47,7 +47,7 @@ func CreateConsumer(ctx context.Context, streamUUID StreamUUID, handler StreamCo
 		PauseDuration:       500 * time.Millisecond,
 		WaitForBackPressure: false,
 		BackPressure:        NewExpBackoff(ctx.Done(), time.Duration(200)*time.Millisecond, time.Duration(30)*time.Second),
-		Params:              RecordsIteratorParams{IteratorType: IteratorTypeFirstMessage},
+		Params:              RecordsIteratorParams{IteratorType: IteratorTypeFirstMessage, MaxWaitTimeSeconds: nil},
 		GetRecordsChunks:    10,
 		Handler:             handler,
 	}

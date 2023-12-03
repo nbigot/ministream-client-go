@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -36,17 +37,19 @@ type MinistreamClient struct {
 	userAgent string
 	auth      MinistreamClientAuth
 	client    http.Client
+	logger    *log.Logger
 }
 
 type RecordsIteratorParams struct {
-	Name         string       `json:"name"`
-	IteratorType IteratorType `json:"iteratorType"`
-	JqFilter     string       `json:"jqFilter"`
-	MessageId    MessageId    `json:"messageId"`
-	Timestamp    time.Time    `json:"timestamp"`
+	Name               *string      `json:"name,omitempty"`
+	IteratorType       IteratorType `json:"iteratorType"`
+	JqFilter           *string      `json:"jqFilter,omitempty"`
+	MessageId          *MessageId   `json:"messageId,omitempty"`
+	Timestamp          *time.Time   `json:"timestamp,omitempty"`
+	MaxWaitTimeSeconds *int         `json:"maxWaitTimeSeconds,omitempty"` // long pooling (set 0 to disable)
 }
 
-func CreateClient(url string, userAgent string, creds *Credentials, insecureSkipVerifyTLS bool, timeout time.Duration) *MinistreamClient {
+func CreateClient(url string, userAgent string, creds *Credentials, insecureSkipVerifyTLS bool, timeout time.Duration, logger *log.Logger) *MinistreamClient {
 	var tr *http.Transport = nil
 	if insecureSkipVerifyTLS {
 		tr = &http.Transport{
@@ -60,7 +63,7 @@ func CreateClient(url string, userAgent string, creds *Credentials, insecureSkip
 		auth.enabled = true
 	}
 
-	return &MinistreamClient{url: url, userAgent: userAgent, auth: auth, client: http.Client{Transport: tr, Timeout: timeout}}
+	return &MinistreamClient{url: url, userAgent: userAgent, auth: auth, client: http.Client{Transport: tr, Timeout: timeout}, logger: logger}
 }
 
 func (c *MinistreamClient) Reconnect() *APIError {
@@ -86,7 +89,7 @@ func (c *MinistreamClient) Authenticate(ctx context.Context) *APIError {
 	headers["ACCESS-KEY-ID"] = c.auth.creds.Login
 	headers["SECRET-ACCESS-KEY"] = c.auth.creds.Password
 	result := LoginUserResponse{}
-	_, err := CallWebAPI(ctx, &c.client, method, url, nil, &headers, 200, &result)
+	_, err := CallWebAPI(ctx, &c.client, method, url, nil, &headers, 200, &result, c.logger)
 	if err != nil {
 		if err.Code == ErrorJWTNotEnabled {
 			// authentication is disabled on server side
@@ -106,12 +109,13 @@ func (c *MinistreamClient) Authenticate(ctx context.Context) *APIError {
 }
 
 func (c *MinistreamClient) CreateRecordsIterator(ctx context.Context, streamUUID uuid.UUID, p *RecordsIteratorParams) (*CreateRecordsIteratorResponse, *APIError) {
-	var bodyRequest string
-	if p.JqFilter == "" {
-		bodyRequest = fmt.Sprintf(`{"iteratorType": "%s"}`, p.IteratorType)
-	} else {
-		bodyRequest = fmt.Sprintf(`{"iteratorType": "%s", "jqFilter": "%s"}`, p.IteratorType, strings.ReplaceAll(p.JqFilter, `"`, `\"`))
+	bytesRequest, errMarshal := json.Marshal(p)
+	if errMarshal != nil {
+		return nil, &APIError{
+			Message: errMarshal.Error(),
+		}
 	}
+	bodyRequest := string(bytesRequest)
 	method := "POST"
 	url := fmt.Sprintf("%s/api/v1/stream/%s/iterator", c.url, streamUUID)
 	headers := make(map[string]string)
@@ -124,7 +128,7 @@ func (c *MinistreamClient) CreateRecordsIterator(ctx context.Context, streamUUID
 	}
 	result := CreateRecordsIteratorResponse{}
 
-	_, err := CallWebAPI(ctx, &c.client, method, url, strings.NewReader(bodyRequest), &headers, 200, &result)
+	_, err := CallWebAPI(ctx, &c.client, method, url, strings.NewReader(bodyRequest), &headers, 200, &result, c.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +152,7 @@ func (c *MinistreamClient) GetRecords(ctx context.Context, streamUUID uuid.UUID,
 		headers["Authorization"] = "Bearer " + c.auth.jwt.Token
 	}
 	result := GetStreamRecordsResponse{}
-	resp, err := CallWebAPI(ctx, &c.client, method, url, nil, &headers, 200, &result)
+	resp, err := CallWebAPI(ctx, &c.client, method, url, nil, &headers, 200, &result, c.logger)
 	if err != nil {
 		return nil, resp, err
 	}
@@ -177,9 +181,9 @@ func (c *MinistreamClient) CloseRecordsIterator(ctx context.Context, streamUUID 
 	// 	GotConn: func(info httptrace.GotConnInfo) { log.Printf("conn was reused: %t", info.Reused) },
 	// }
 	// traceCtx := httptrace.WithClientTrace(ctx, clientTrace)
-	// _, err := CallWebAPI(traceCtx, &c.client, method, url, nil, &headers, 200, &result)
+	// _, err := CallWebAPI(traceCtx, &c.client, method, url, nil, &headers, 200, &result, c.logger)
 
-	_, err := CallWebAPI(ctx, &c.client, method, url, nil, &headers, 200, &result)
+	_, err := CallWebAPI(ctx, &c.client, method, url, nil, &headers, 200, &result, c.logger)
 	if err != nil {
 		return err
 	}
@@ -207,7 +211,7 @@ func (c *MinistreamClient) PutRecords(ctx context.Context, streamUUID uuid.UUID,
 		return nil, nil, &APIError{Message: "Can't serialize records into json"}
 	}
 	result := PutRecordsResponse{}
-	resp, apiError := CallWebAPI(ctx, &c.client, method, url, bytes.NewReader(jsonBody), &headers, 202, &result)
+	resp, apiError := CallWebAPI(ctx, &c.client, method, url, bytes.NewReader(jsonBody), &headers, 202, &result, c.logger)
 	if apiError != nil {
 		return nil, resp, apiError
 	}
@@ -222,6 +226,7 @@ func (c *MinistreamClient) PutRecords(ctx context.Context, streamUUID uuid.UUID,
 func CallWebAPI[T any](
 	ctx context.Context, client *http.Client, method string, url string,
 	bodyRequest io.Reader, headers *map[string]string, expectedHttpStatusCode int, result T,
+	logger *log.Logger,
 ) (*http.Response, *APIError) {
 	req, err1 := http.NewRequestWithContext(ctx, method, url, bodyRequest)
 
@@ -233,6 +238,10 @@ func CallWebAPI[T any](
 		for k, v := range *headers {
 			req.Header.Add(k, v)
 		}
+	}
+
+	if logger != nil {
+		logger.Printf("CallWebAPI: %+v\n", req)
 	}
 
 	// Don't disable the keepalive (http/1.1)

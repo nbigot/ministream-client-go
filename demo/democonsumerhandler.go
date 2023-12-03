@@ -33,7 +33,9 @@ func (h *ConsumerHandlerDemo) GetClient() *MinistreamClient {
 }
 
 func (h *ConsumerHandlerDemo) GetRecordsIteratorParams() *RecordsIteratorParams {
-	return &RecordsIteratorParams{Name: "benchmark 1", IteratorType: IteratorTypeFirstMessage}
+	name := "benchmark 1"
+	maxWaitTimeSeconds := 10 // enable long pooling (10 seconds)
+	return &RecordsIteratorParams{Name: &name, IteratorType: IteratorTypeFirstMessage, MaxWaitTimeSeconds: &maxWaitTimeSeconds}
 }
 
 func (h *ConsumerHandlerDemo) OnAuthenticationSuccess() {
