@@ -37,7 +37,10 @@ func TestNewStreamProducer(t *testing.T) {
 			client := tt.args.client.(*MockProducerClient)
 			producer := NewStreamProducer(tt.args.ctx, nil, 0, client, tt.args.streamUUID, handler)
 			handler.Init(producer)
-			producer.Run(tt.args.ctx)
+			err := producer.Run(tt.args.ctx)
+			if err != nil {
+				t.Errorf("Run() = %v, want %v", err, nil)
+			}
 			if producer.GetState() != types.ProducerStateClosed {
 				t.Errorf("GetState() = %v, want %v", producer.GetState(), types.ProducerStateClosed)
 			}

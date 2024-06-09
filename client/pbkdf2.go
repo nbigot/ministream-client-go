@@ -3,12 +3,11 @@ package ministreamclient
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
-	"time"
 
 	. "github.com/nbigot/ministream-client-go/client/types"
 )
@@ -72,8 +71,10 @@ func MakePbkdf2Request(password string) *Pbkdf2Request {
 }
 
 func randomString(length int) string {
-	rand.Seed(time.Now().UnixNano())
 	b := make([]byte, length)
-	rand.Read(b)
+	_, err := rand.Read(b)
+	if err != nil {
+		panic(err)
+	}
 	return fmt.Sprintf("%x", b)[:length]
 }
