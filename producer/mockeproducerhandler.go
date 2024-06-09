@@ -1,4 +1,4 @@
-package demo
+package ministreamproducer
 
 import (
 	"context"
@@ -11,10 +11,9 @@ import (
 
 	. "github.com/nbigot/ministream-client-go/client/backoff"
 	. "github.com/nbigot/ministream-client-go/client/types"
-	. "github.com/nbigot/ministream-client-go/producer"
 )
 
-type ProducerEventHandlerDemo struct {
+type MockProducerEventHandler struct {
 	// implements interface ProducerEventHandler
 	Logger                               *log.Logger
 	cptRecordsEnqueued                   int64
@@ -33,24 +32,24 @@ type ProducerEventHandlerDemo struct {
 	sendBatchSize                        int64
 }
 
-func (h *ProducerEventHandlerDemo) GetLogger() *log.Logger {
+func (h *MockProducerEventHandler) GetLogger() *log.Logger {
 	if h.Logger == nil {
-		h.Logger = log.New(os.Stdout, "ProducerEventHandlerDemo ", log.Ldate|log.Ltime|log.Lmicroseconds|log.LUTC)
+		h.Logger = log.New(os.Stdout, "MockProducerEventHandler ", log.Ldate|log.Ltime|log.Lmicroseconds|log.LUTC)
 	}
 	return h.Logger
 }
 
-func (h *ProducerEventHandlerDemo) OnSendError() {
+func (h *MockProducerEventHandler) OnSendError() {
 	h.Logger.Println("OnSendError")
 }
 
-func (h *ProducerEventHandlerDemo) OnPreBatchSent(batchId int, batchSize int) {
+func (h *MockProducerEventHandler) OnPreBatchSent(batchId int, batchSize int) {
 	h.batchNumber++
 	h.Logger.Printf("OnPreBatchSent: batchId=%d, batchNumber=%d flushed %d records...\n", batchId, h.batchNumber, batchSize)
 	h.lastStartSendHttpRequest = time.Now()
 }
 
-func (h *ProducerEventHandlerDemo) OnPostBatchSent(batchId int, batchSize int) {
+func (h *MockProducerEventHandler) OnPostBatchSent(batchId int, batchSize int) {
 	h.totalRecordsSend += int64(batchSize)
 	h.lastHttpRequestDuration = time.Since(h.lastStartSendHttpRequest)
 	h.Logger.Printf(
@@ -59,14 +58,14 @@ func (h *ProducerEventHandlerDemo) OnPostBatchSent(batchId int, batchSize int) {
 	)
 }
 
-func (h *ProducerEventHandlerDemo) OnStateChanged(state ProducerState) {
+func (h *MockProducerEventHandler) OnStateChanged(state ProducerState) {
 	h.Logger.Printf("OnStateChanged: new state is %d\n", state)
 	if state == ProducerStateRunning {
 		go h.CreateRecords()
 	}
 }
 
-func (h *ProducerEventHandlerDemo) CreateRecords() {
+func (h *MockProducerEventHandler) CreateRecords() {
 	h.Logger.Println("CreateRecords: start create records")
 	defer h.producer.SetState(ProducerStateClosing) // ask producer to stop
 	defer h.Logger.Println("CreateRecords: stop create records")
@@ -101,7 +100,7 @@ func (h *ProducerEventHandlerDemo) CreateRecords() {
 	}
 }
 
-func (h *ProducerEventHandlerDemo) OnRecordsEnqueued(cptRecords int, index int, total int) error {
+func (h *MockProducerEventHandler) OnRecordsEnqueued(cptRecords int, index int, total int) error {
 	// note: OnRecordsEnqueued is responsible for wait/sleep for error retry
 	// handle the logic for rate control and failure when pushing the records into the buffer
 	if cptRecords > 0 {
@@ -131,20 +130,20 @@ func (h *ProducerEventHandlerDemo) OnRecordsEnqueued(cptRecords int, index int, 
 	return nil // try again to push records into the buffer
 }
 
-func (h *ProducerEventHandlerDemo) OnRecordEnqueueTimeout(records []interface{}, cptRecordsEnqueued int, cptRecordsNotEnqueued int) {
+func (h *MockProducerEventHandler) OnRecordEnqueueTimeout(records []interface{}, cptRecordsEnqueued int, cptRecordsNotEnqueued int) {
 	h.Logger.Printf("OnRecordEnqueueTimeout: %d records enqueued, %d records not enqueued\n", cptRecordsEnqueued, cptRecordsNotEnqueued)
 }
 
-func (h *ProducerEventHandlerDemo) Init(producer *StreamProducer) {
+func (h *MockProducerEventHandler) Init(producer *StreamProducer) {
 	h.producer = producer
 	h.GetLogger()
 }
 
-func NewProducerEventHandlerDemo(ctx context.Context, cptRecordsToSend int64, sendBatchSize int64) *ProducerEventHandlerDemo {
+func NewMockProducerEventHandler(ctx context.Context, cptRecordsToSend int64, sendBatchSize int64) *MockProducerEventHandler {
 	if sendBatchSize > MaxPushRecordsByCall {
 		panic(fmt.Sprintf("sendBatchSize must be less than %d", MaxPushRecordsByCall))
 	}
-	return &ProducerEventHandlerDemo{
+	return &MockProducerEventHandler{
 		batchNumber:                          0,
 		totalRecordsCreated:                  0,
 		totalRecordsSend:                     0,

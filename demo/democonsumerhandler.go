@@ -1,11 +1,16 @@
 package demo
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
 	"os"
+	"strings"
+	"sync"
 
 	. "github.com/nbigot/ministream-client-go/client"
 	. "github.com/nbigot/ministream-client-go/client/types"
+	ministreamproducer "github.com/nbigot/ministream-client-go/producer"
 )
 
 const MaxRetryCounterAuthenticate = 10
@@ -19,6 +24,10 @@ type ConsumerHandlerDemo struct {
 	RetryCounterAuthenticate          int
 	RetryCounterCreateRecordsIterator int
 	StopOnCptRecordsProcessed         int64
+	nextExpectedRecordID              int64
+	enableCheckRecordID               bool
+	getRecordsSuccessCounter          int
+	mu                                sync.Mutex
 }
 
 func (h *ConsumerHandlerDemo) GetLogger() *log.Logger {
@@ -92,8 +101,7 @@ func (h *ConsumerHandlerDemo) OnUnexpectedError(apiError *APIError) bool {
 	h.Logger.Printf("consumer: OnUnexpectedError: %s\n", apiError.ToJson())
 	//panic(apiError) // TODO: handle timeout
 
-	// return true to continue consumming (continue/try again)
-	// return false to stop consumming
+	// return true to continue consumming (continue/try again) or false to stop consumming
 	return false
 }
 
@@ -110,24 +118,76 @@ func (h *ConsumerHandlerDemo) OnClose() {
 }
 
 func (h *ConsumerHandlerDemo) OnGetRecordsSuccess(response *GetStreamRecordsResponse) bool {
-	h.Logger.Println("OnGetRecords")
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
-	// insert your custom action there:
+	h.getRecordsSuccessCounter++
+
+	// TODO: insert your custom action there:
 	// example:
+	// h.Logger.Printf("OnGetRecordsSuccess: getRecordsSuccessCounter=%d\n", h.getRecordsSuccessCounter)
 	// h.Logger.Printf("%+v\n", response)
 	// for record := range response.Records {
 	// 	h.Logger.Printf("%+v\n", record)
 	// }
 
+	// verify each record, ensure that the record ids are in sequence.
+	// the goal is to check if the records are received in the correct order.
+	if h.enableCheckRecordID {
+		var envelope ResponseRecordEnvelope
+		var simpleRecord ministreamproducer.SimpleRecord
+		for _, record := range response.Records {
+			h.nextExpectedRecordID++
+
+			// record is a map[string]interface{}
+			// convert the record to a ResponseRecordEnvelope
+			envelopeBytes, err := json.Marshal(record)
+			if err != nil {
+				h.Logger.Printf("consumer: OnGetRecordsSuccess: error, Marshal record: nextExpectedRecordID %d, record: %v\n", h.nextExpectedRecordID, record)
+				// drop the record
+				continue
+			}
+			if err := json.Unmarshal(envelopeBytes, &envelope); err != nil {
+				h.Logger.Printf("consumer: OnGetRecordsSuccess: error, Unmarshal record: nextExpectedRecordID %d, expected %s\n", h.nextExpectedRecordID, record)
+				// drop the record
+				continue
+			}
+
+			recordBytes, err := json.Marshal(envelope.Msg)
+			if err != nil {
+				h.Logger.Printf("consumer: OnGetRecordsSuccess: error, Marshal record: nextExpectedRecordID %d, record: %v\n", h.nextExpectedRecordID, record)
+				// drop the record
+				continue
+			}
+			if err := json.Unmarshal(recordBytes, &simpleRecord); err != nil {
+				h.Logger.Printf("consumer: OnGetRecordsSuccess: error, Unmarshal record: nextExpectedRecordID %d, expected %s\n", h.nextExpectedRecordID, record)
+				// drop the record
+				continue
+			}
+
+			if envelope.Id != uint64(h.nextExpectedRecordID) {
+				h.Logger.Printf("consumer: OnGetRecordsSuccess: error, record id mismatch: got %d, expected %d\n", envelope.Id, h.nextExpectedRecordID)
+			}
+
+			expectedMsg := fmt.Sprintf("hello world %d ", h.nextExpectedRecordID)
+			if !strings.HasPrefix(simpleRecord.Msg, expectedMsg) {
+				h.Logger.Printf("consumer: OnGetRecordsSuccess: error, record id mismatch: getRecordsSuccessCounter=%d got %d, expected %s\n", h.getRecordsSuccessCounter, h.nextExpectedRecordID, simpleRecord.Msg)
+			}
+		}
+	}
+
 	cptRecordsProcessed := int64(len(response.Records))
 	h.CptRecordsProcessed += cptRecordsProcessed
 	h.Logger.Printf(
-		"OnGetRecordsSuccess: new records processed=%d, total records processed=%d",
-		cptRecordsProcessed, h.CptRecordsProcessed,
+		"OnGetRecordsSuccess: getRecordsSuccessCounter=%d, new records processed=%d, total records processed=%d",
+		h.getRecordsSuccessCounter, cptRecordsProcessed, h.CptRecordsProcessed,
 	)
 	if h.CptRecordsProcessed >= h.StopOnCptRecordsProcessed {
+		// success: all records have been processed
+		// return false to stop consumming (stop)
 		return false
 	} else {
+		// return true to continue consumming (continue/try again)
 		return true
 	}
 }
@@ -152,5 +212,7 @@ func NewConsumerHandlerDemo(client *MinistreamClient, stopOnCptRecordsProcessed 
 		RetryCounterAuthenticate:          0,
 		RetryCounterCreateRecordsIterator: 0,
 		StopOnCptRecordsProcessed:         stopOnCptRecordsProcessed,
+		enableCheckRecordID:               true,
+		nextExpectedRecordID:              0,
 	}
 }

@@ -33,6 +33,7 @@ type MinistreamClientAuth struct {
 }
 
 type MinistreamClient struct {
+	// implements interface IProducerClient
 	url       string
 	userAgent string
 	auth      MinistreamClientAuth
@@ -142,7 +143,12 @@ func (c *MinistreamClient) CreateRecordsIterator(ctx context.Context, streamUUID
 
 func (c *MinistreamClient) GetRecords(ctx context.Context, streamUUID uuid.UUID, streamIteratorUUID uuid.UUID, maxPullRecords int) (*GetStreamRecordsResponse, *http.Response, *APIError) {
 	method := "GET"
-	url := fmt.Sprintf("%s/api/v1/stream/%s/iterator/%s/records", c.url, streamUUID, streamIteratorUUID)
+	var url string
+	if maxPullRecords > 0 {
+		url = fmt.Sprintf("%s/api/v1/stream/%s/iterator/%s/records?maxRecords=%d", c.url, streamUUID, streamIteratorUUID, maxPullRecords)
+	} else {
+		url = fmt.Sprintf("%s/api/v1/stream/%s/iterator/%s/records", c.url, streamUUID, streamIteratorUUID)
+	}
 	headers := make(map[string]string)
 	headers["Content-Type"] = "application/json"
 	headers["Accept"] = "application/json"
@@ -195,7 +201,7 @@ func (c *MinistreamClient) CloseRecordsIterator(ctx context.Context, streamUUID 
 	return nil
 }
 
-func (c *MinistreamClient) PutRecords(ctx context.Context, streamUUID uuid.UUID, records []interface{}) (*PutRecordsResponse, *http.Response, *APIError) {
+func (c *MinistreamClient) PutRecords(ctx context.Context, streamUUID uuid.UUID, batchId int, records []interface{}) (*PutRecordsResponse, *http.Response, *APIError) {
 	method := "PUT"
 	url := fmt.Sprintf("%s/api/v1/stream/%s/records", c.url, streamUUID)
 	headers := make(map[string]string)
@@ -203,6 +209,7 @@ func (c *MinistreamClient) PutRecords(ctx context.Context, streamUUID uuid.UUID,
 	headers["Accept"] = "application/json"
 	headers["Connection"] = "keep-alive"
 	headers["User-Agent"] = c.userAgent
+	headers["x-ministream-batch-id"] = fmt.Sprintf("%d", batchId)
 	if c.auth.enabled && c.auth.creds != nil {
 		headers["Authorization"] = "Bearer " + c.auth.jwt.Token
 	}
@@ -259,6 +266,11 @@ func CallWebAPI[T any](
 	if resp.StatusCode == 429 {
 		// rate limiter (mitigation): the server says too many requests, try again later
 		return resp, &APIError{Message: "rate limiter", Details: resp.Status, Code: ErrorTooManyRequests}
+	}
+
+	if resp.StatusCode == 425 {
+		// the server says he is too busy, try again later
+		return resp, &APIError{Message: "server busy", Details: resp.Status, Code: ErrorStreamIteratorIsBusy}
 	}
 
 	body, err3 := io.ReadAll(resp.Body)

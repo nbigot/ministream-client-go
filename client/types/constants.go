@@ -9,6 +9,7 @@ const MaxPullRecordsByCall = 10000
 const MaxPushRecordsByCall = 10000
 const DefaultRecordsQueueLen = 10000
 
+const ErrorDuplicatedBatchId = 1008
 const ErrorCantGetMessagesFromStream = 1020
 
 const ErrorJWTMissingOrMalformed = 1200
@@ -21,6 +22,7 @@ const ErrorAuthInternalError = 1220
 const ErrorWrongCredentials = 1230
 
 const ErrorStreamIteratorNotFound = 1031
+const ErrorStreamIteratorIsBusy = 1032
 const ErrorHTTPTimeout = 2000
 const ErrorTimeout = 2001
 const ErrorContextDeadlineExceeded = 2002
