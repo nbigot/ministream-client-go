@@ -33,7 +33,13 @@ type StreamConsumer struct {
 	Handler             StreamConsumerHandler
 }
 
-func CreateConsumer(ctx context.Context, streamUUID StreamUUID, handler StreamConsumerHandler) *StreamConsumer {
+func CreateConsumer(ctx context.Context, streamUUID StreamUUID, handler StreamConsumerHandler, getRecordsChunks int) *StreamConsumer {
+	if getRecordsChunks < 1 {
+		getRecordsChunks = 1
+	} else if getRecordsChunks > MaxPullRecordsByCall {
+		getRecordsChunks = MaxPullRecordsByCall
+	}
+
 	c := StreamConsumer{
 		client:              handler.GetClient(),
 		logger:              handler.GetLogger(),
@@ -48,7 +54,7 @@ func CreateConsumer(ctx context.Context, streamUUID StreamUUID, handler StreamCo
 		WaitForBackPressure: false,
 		BackPressure:        NewExpBackoff(ctx.Done(), time.Duration(200)*time.Millisecond, time.Duration(30)*time.Second),
 		Params:              RecordsIteratorParams{IteratorType: IteratorTypeFirstMessage, MaxWaitTimeSeconds: nil},
-		GetRecordsChunks:    10,
+		GetRecordsChunks:    getRecordsChunks,
 		Handler:             handler,
 	}
 	return &c
@@ -222,6 +228,11 @@ func (c *StreamConsumer) Poll(ctx context.Context) bool {
 			{
 				// need to recreate a stream iterator
 				c.hasRecordsIterator = false
+			}
+		case ErrorStreamIteratorIsBusy:
+			{
+				// retry later
+				c.WaitForBackPressure = true
 			}
 		case ErrorHTTPTimeout:
 			{

@@ -2,10 +2,10 @@ package ministreamproducer
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
-	ministreamclient "github.com/nbigot/ministream-client-go/client"
 	"github.com/nbigot/ministream-client-go/client/backoff"
 	"github.com/nbigot/ministream-client-go/client/types"
 
@@ -13,7 +13,7 @@ import (
 )
 
 type StreamProducer struct {
-	Client                *ministreamclient.MinistreamClient
+	Client                types.IProducerClient
 	RecordsQueue          *CircularBuffer
 	WaitForBackPressure   bool
 	BackPressure          *backoff.ExpBackoff
@@ -24,6 +24,8 @@ type StreamProducer struct {
 	ShutdownTimeout       time.Duration
 	chEvOnStateChanged    chan types.ProducerState
 	chEvOnRecordsEnqueued chan struct{}
+	Logger                *log.Logger
+	LogLevel              int
 	mu                    sync.Mutex
 }
 
@@ -31,6 +33,13 @@ type SimpleRecord struct {
 	Date time.Time `json:"date"`
 	Msg  string    `json:"msg"`
 }
+
+const (
+	DEBUG = iota
+	INFO
+	WARNING
+	ERROR
+)
 
 func (p *StreamProducer) EnqueueStringRecord(record string) (int, error) {
 	return p.EnqueueRecord(SimpleRecord{Date: time.Now(), Msg: record})
@@ -53,8 +62,10 @@ func (p *StreamProducer) EnqueueRecords(records []interface{}) (int, error) {
 	indexBegin := 0
 	indexEnd := total - 1
 
+	p.Log(INFO, "EnqueueRecords: start\n")
 	for indexBegin <= indexEnd {
 		cptItemsPushed := p.RecordsQueue.PushItems(records, indexBegin, indexEnd)
+		p.Log(DEBUG, "EnqueueRecords: cptItemsPushed=%d\n", cptItemsPushed)
 		if cptItemsPushed > 0 {
 			indexBegin += cptItemsPushed
 			p.chEvOnRecordsEnqueued <- struct{}{}
@@ -66,6 +77,7 @@ func (p *StreamProducer) EnqueueRecords(records []interface{}) (int, error) {
 			return indexBegin, err
 		}
 	}
+	p.Log(INFO, "EnqueueRecords: end\n")
 
 	return total, nil
 }
@@ -80,22 +92,37 @@ func (p *StreamProducer) Run(ctx context.Context) error {
 	chEvBackpressureTimeout := make(chan bool, 1)
 	chEvCheckForRecordsToSend := make(chan struct{}, 1)
 
+	// create context for closing
+	ctxClosing, ctxCancelClosingFunc := context.WithCancel(ctx)
+	defer ctxCancelClosingFunc()
+
 	go p.SetState(types.ProducerStateRunning)
 
 	for {
 		select {
 		case <-ctx.Done():
 			p.SetState(types.ProducerStateClosing)
+		case <-ctxClosing.Done():
+			p.FinalizeClosingState()
 		case <-p.chEvOnRecordsEnqueued:
 			// record(s) is/are ready to be send
 			go func() { chEvCheckForRecordsToSend <- struct{}{} }()
 		case <-chEvBackpressureTimeout:
 			go func() { chEvCheckForRecordsToSend <- struct{}{} }()
 		case <-chEvCheckForRecordsToSend:
+			// security: check if the producer is still running nor closing
+			if p.GetState() != types.ProducerStateRunning && p.GetState() != types.ProducerStateClosing {
+				continue
+			}
+
 			p.FillRecordsBufferFromQueue()
-			p.SendBatchRecords(ctx)
+			err := p.SendBatchRecords(ctx)
 			if p.WaitForBackPressure {
 				p.BackPressure.WaitAndNotify(chEvBackpressureTimeout)
+			} else if err != nil {
+				// error occurred while sending records
+				// try to send the records again
+				go func() { chEvCheckForRecordsToSend <- struct{}{} }()
 			}
 		case newState := <-p.chEvOnStateChanged:
 			switch newState {
@@ -111,24 +138,48 @@ func (p *StreamProducer) Run(ctx context.Context) error {
 				}
 			case types.ProducerStateClosing:
 				{
-					// last chance to send pending records
-					p.FillRecordsBufferFromQueue()
-					ctxShutdown, ctxCancelFunc := context.WithTimeout(ctx, p.ShutdownTimeout)
-					defer ctxCancelFunc()
-					p.SendBatchRecords(ctxShutdown)
-					// all remaining records in the queue whill be lost
-					p.RecordsQueue.Clear()
-					p.Batch.Clear()
-					p.Client.Disconnect()
-					p.SetState(types.ProducerStateClosed)
+					if p.RecordsQueue.IsEmpty() && p.Batch.IsEmpty() {
+						// no records left to be sent,
+						// close the producer immediately
+						ctxCancelClosingFunc()
+					} else {
+						// some records are still in the queue give them a chance to be sent
+						time.AfterFunc(p.ShutdownTimeout, func() {
+							// the deadline has been exceeded
+							ctxCancelClosingFunc()
+						})
+					}
 				}
 			case types.ProducerStateClosed:
 				{
+					// producer is closed, exit the loop
 					return nil
 				}
 			}
 		}
 	}
+}
+
+func (p *StreamProducer) FinalizeClosingState() {
+	if p.GetState() != types.ProducerStateClosing {
+		p.Log(INFO, "FinalizeClosingState: ignore: state is not ProducerStateClosing\n")
+		return
+	}
+
+	// TODO: customize with your own behavior to handle the records that are still in the queue
+	// all remaining records in the queue will be lost!
+	if !p.RecordsQueue.IsEmpty() {
+		p.Log(ERROR, "FinalizeClosingState: %d records in queue are lost\n", p.RecordsQueue.Size())
+	}
+	p.RecordsQueue.Clear()
+
+	if !p.Batch.IsEmpty() {
+		p.Log(ERROR, "FinalizeClosingState: %d records in batch are lost\n", p.Batch.Size())
+	}
+	p.Batch.Clear()
+
+	p.Client.Disconnect()
+	p.SetState(types.ProducerStateClosed)
 }
 
 func (p *StreamProducer) FillRecordsBufferFromQueue() {
@@ -149,36 +200,67 @@ func (p *StreamProducer) FillRecordsBufferFromQueue() {
 	}
 }
 
-func (p *StreamProducer) SendBatchRecords(ctx context.Context) {
+func (p *StreamProducer) SendBatchRecords(ctx context.Context) error {
 	cptRecords := p.Batch.Size()
 	if cptRecords == 0 {
 		// no records to be sent
-		return
+		return nil
 	}
 
-	p.EvHandler.OnPreBatchSent(cptRecords)
+	batchId := p.Batch.GetId()
+	p.EvHandler.OnPreBatchSent(batchId, cptRecords)
 
 	// send all the records in the buffer to the server
-	_, httpResponse, apiError := p.Client.PutRecords(ctx, p.StreamUUID, p.Batch.GetRecords())
+	response, httpResponse, apiError := p.Client.PutRecords(ctx, p.StreamUUID, p.Batch.GetId(), p.Batch.GetRecords())
+	if response != nil {
+		p.Log(DEBUG, "SendBatchRecords response: %v\n", response)
+	}
 	if apiError != nil {
-		p.WaitForBackPressure = true
-		if httpResponse != nil {
-			rateLimit := backoff.RateLimitFromHttpResponse(httpResponse)
-			if rateLimit.RetryAfter > 0 || httpResponse.StatusCode == 429 {
-				// error is due to rate limiting (retry later)
-				p.BackPressure.SetDuration(time.Duration(rateLimit.RetryAfter) * time.Second)
+		switch apiError.Code {
+		case types.ErrorHTTPTimeout:
+			// error is due to timeout on client side
+			// at this point the batch may have been sent to the server and the server may be still processing it
+			// we can't be sure if the processing was/will be successful or not
+			// we must retry the batch without changing the batch id, to avoid duplicates (server handles deduplication)
+			// we don't need to wait for back pressure, because the server may have already processed the batch
+			p.WaitForBackPressure = false
+		case types.ErrorDuplicatedBatchId:
+			// error is due to duplicated batch id
+			// the server has already processed the batch
+			// this batch must be considered as successfully sent
+			p.WaitForBackPressure = false
+			p.Batch.Clear()
+			p.BackPressure.Reset()
+			p.EvHandler.OnPostBatchSent(batchId, 0)
+			return nil // pretend it's a success
+		case types.ErrorTooManyRequests:
+			// error is due to rate limiting on server side (retry later)
+			p.WaitForBackPressure = true
+			var duration uint64 = 1 // default duration (1 second)
+			if httpResponse != nil {
+				// try to get a rate limit from the http response
+				rateLimit := backoff.RateLimitFromHttpResponse(httpResponse)
+				if rateLimit.RetryAfter > 0 || httpResponse.StatusCode == 429 {
+					// error is due to rate limiting (retry later)
+					duration = rateLimit.RetryAfter
+				}
 			}
+			p.BackPressure.SetDuration(time.Duration(duration) * time.Second)
+		default:
+			p.WaitForBackPressure = true
 		}
+
 		// failed to send records to the server
-		p.EvHandler.OnPostBatchSent(0)
-		return
+		p.EvHandler.OnPostBatchSent(batchId, 0)
+		return apiError
 	}
 
 	// succeeded to send records to the server
 	p.WaitForBackPressure = false
 	p.Batch.Clear()
 	p.BackPressure.Reset()
-	p.EvHandler.OnPostBatchSent(cptRecords)
+	p.EvHandler.OnPostBatchSent(batchId, cptRecords)
+	return nil
 }
 
 func (p *StreamProducer) SetState(state types.ProducerState) {
@@ -194,7 +276,14 @@ func (p *StreamProducer) GetState() types.ProducerState {
 	return p.State
 }
 
-func NewStreamProducer(ctx context.Context, client *ministreamclient.MinistreamClient, streamUUID uuid.UUID, h ProducerEventHandler) *StreamProducer {
+func (p *StreamProducer) Log(level int, format string, v ...interface{}) {
+	if p.Logger == nil || level < p.LogLevel {
+		return
+	}
+	p.Logger.Printf(format, v...)
+}
+
+func NewStreamProducer(ctx context.Context, logger *log.Logger, logLevel int, client types.IProducerClient, streamUUID uuid.UUID, h ProducerEventHandler) *StreamProducer {
 	p := StreamProducer{
 		Client:                client,
 		RecordsQueue:          BuildCircularBuffer(types.DefaultRecordsQueueLen + 1),
@@ -203,8 +292,10 @@ func NewStreamProducer(ctx context.Context, client *ministreamclient.MinistreamC
 		State:                 types.ProducerStateInitialized,
 		EvHandler:             h,
 		StreamUUID:            streamUUID,
-		Batch:                 BuildBatchRecords(types.MaxPushRecordsByCall),
+		Batch:                 NewBatchRecords(types.MaxPushRecordsByCall),
 		ShutdownTimeout:       30 * time.Second,
+		Logger:                logger,
+		LogLevel:              logLevel,
 		chEvOnStateChanged:    make(chan types.ProducerState, 1),
 		chEvOnRecordsEnqueued: make(chan struct{}, 1),
 	}

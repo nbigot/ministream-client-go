@@ -21,13 +21,16 @@ var wg sync.WaitGroup
 var logger *log.Logger = nil
 var cptRecordsToSend int64 = 100000
 var sendBatchSize int64 = 10000
-var serverUrl string = "http://127.0.0.1:80"
+var getRecordsChunks int = 1000
+var serverUrl string = "http://127.0.0.1:8080"
+var login string = "benchmark"
+var password string = "benchmark"
 
 func prepareProducer(ctx context.Context, client *MinistreamClient) (*APIError, *StreamProducer, StreamUUID) {
 	var apiError *APIError
 
 	if client == nil {
-		client = createClient(ctx)
+		client = createClient(ctx, login, password, nil)
 	}
 
 	if apiError = client.Authenticate(ctx); apiError != nil {
@@ -37,40 +40,41 @@ func prepareProducer(ctx context.Context, client *MinistreamClient) (*APIError, 
 	streamProperties := StreamProperties{
 		"name": "benchmark 5", "project": "benchmark", "tags": "benchmark", "env": "test",
 	}
-	response, apiError, err1 := client.CreateStream(ctx, &streamProperties)
-	if err1 != nil {
-		return &APIError{Message: err1.Error()}, nil, uuid.Nil
-	}
-	if apiError != nil {
-		return apiError, nil, uuid.Nil
+	response, err := client.CreateStream(ctx, &streamProperties)
+	if err != nil {
+		// check if it is an APIError
+		if apiError, ok := err.(*APIError); ok {
+			return apiError, nil, uuid.Nil
+		}
+		return &APIError{Message: "can't create stream", Details: err.Error()}, nil, uuid.Nil
 	}
 
 	producerEventHandlerDemo := NewProducerEventHandlerDemo(ctx, cptRecordsToSend, sendBatchSize)
-	producer := NewStreamProducer(ctx, client, response.UUID, producerEventHandlerDemo)
+	producer := NewStreamProducer(ctx, logger, DEBUG, client, response.UUID, producerEventHandlerDemo)
 	producerEventHandlerDemo.Init(producer)
 	return nil, producer, response.UUID
 }
 
 func consume(ctx context.Context, client *MinistreamClient, streamUUID uuid.UUID) {
 	if client == nil {
-		client = createClient(ctx)
+		client = createClient(ctx, login, password, nil)
 	}
 
 	consumerHandler := NewConsumerHandlerDemo(client, cptRecordsToSend)
-	consumer := CreateConsumer(ctx, streamUUID, consumerHandler)
+	consumer := CreateConsumer(ctx, streamUUID, consumerHandler, getRecordsChunks)
 	if err := consumer.Run(ctx); err != nil {
 		logger.Printf("Consumer error (%s)\n", err.Error())
 	}
 }
 
-func createClient(ctx context.Context) *MinistreamClient {
+func createClient(ctx context.Context, login string, password string, logger *log.Logger) *MinistreamClient {
 	return CreateClient(
 		serverUrl,
 		"ministreamGOClient",
-		&Credentials{Login: "benchmark", Password: "benchmark"},
+		&Credentials{Login: login, Password: password},
 		true,
-		10*time.Second,
-		nil, // put 'logger' there if you want to see all http requests in the logs
+		60*time.Second,
+		logger, // put a logger there if you want to see all http requests in the logs or nil to disable
 	)
 }
 

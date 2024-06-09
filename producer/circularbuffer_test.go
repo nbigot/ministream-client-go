@@ -147,3 +147,125 @@ func TestClear(t *testing.T) {
 		t.Fatalf("must be empty")
 	}
 }
+
+func TestFullCapacity(t *testing.T) {
+	var ok bool
+	var value interface{}
+	batchSize := 10000
+	capacity := batchSize + 1
+
+	// create a circular buffer
+	buf := BuildCircularBuffer(capacity)
+	if buf.Capacity() != capacity {
+		t.Fatalf("invalid capacity value")
+	}
+	if buf.AvailableCapacity() != capacity-1 {
+		t.Fatalf("invalid available capacity value")
+	}
+	if buf.IsFull() {
+		t.Fatalf("must not be full")
+	}
+	if !buf.IsEmpty() {
+		t.Fatalf("must be empty")
+	}
+	if buf.Size() != 0 {
+		t.Fatalf("invalid size value")
+	}
+
+	// fill the buffer with items
+	for i := 0; i < batchSize; i++ {
+		if !buf.Push(i) {
+			t.Fatalf("push failed")
+		}
+	}
+
+	// check the buffer state
+	if buf.Capacity() != capacity {
+		t.Fatalf("invalid capacity value")
+	}
+	if buf.IsEmpty() {
+		t.Fatalf("must not be empty")
+	}
+	if buf.Size() != batchSize {
+		t.Fatalf("invalid size value")
+	}
+	if buf.IsFull() {
+		if capacity > batchSize+1 {
+			t.Fatalf("must not be full")
+		}
+	} else {
+		if capacity == batchSize+1 {
+			t.Fatalf("must be full")
+		}
+	}
+	if buf.AvailableCapacity() != capacity-batchSize-1 {
+		t.Fatalf("invalid available capacity value")
+	}
+
+	// pop all the items from the buffer
+	for i := 0; i < batchSize; i++ {
+		if value, ok = buf.Pop(); !ok {
+			t.Fatalf("pop failed")
+		}
+		if value != i {
+			t.Fatalf("invalid value")
+		}
+	}
+
+	// check the buffer state
+	if buf.Capacity() != capacity {
+		t.Fatalf("invalid capacity value")
+	}
+	if buf.IsFull() {
+		t.Fatalf("must not be full")
+	}
+	if !buf.IsEmpty() {
+		t.Fatalf("must be empty")
+	}
+	if buf.Size() != 0 {
+		t.Fatalf("invalid size value")
+	}
+	if buf.AvailableCapacity() != capacity-1 {
+		t.Fatalf("invalid available capacity value")
+	}
+
+	// fill the buffer with items
+	for i := 0; i < batchSize; i++ {
+		if !buf.Push(i + batchSize) {
+			t.Fatalf("push failed")
+		}
+	}
+
+	// check the buffer state
+	if buf.Capacity() != capacity {
+		t.Fatalf("invalid capacity value")
+	}
+	if buf.IsFull() {
+		if capacity > batchSize+1 {
+			t.Fatalf("must not be full")
+		}
+	} else {
+		if capacity == batchSize+1 {
+			t.Fatalf("must be full")
+		}
+	}
+	if buf.IsEmpty() {
+		t.Fatalf("must not be empty")
+	}
+	if buf.Size() != batchSize {
+		t.Fatalf("invalid size value")
+	}
+	if buf.AvailableCapacity() != capacity-batchSize-1 {
+		t.Fatalf("invalid available capacity value")
+	}
+
+	// pop all the items from the buffer
+	for i := 0; i < batchSize; i++ {
+		if value, ok = buf.Pop(); !ok {
+			t.Fatalf("pop failed")
+		}
+		if value != i+batchSize {
+			t.Fatalf("invalid value")
+		}
+	}
+}

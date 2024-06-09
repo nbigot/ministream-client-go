@@ -11,7 +11,7 @@ import (
 	. "github.com/nbigot/ministream-client-go/client/types"
 )
 
-func (c *MinistreamClient) CreateStream(ctx context.Context, properties *StreamProperties) (*CreateStreamResponse, *APIError, error) {
+func (c *MinistreamClient) CreateStream(ctx context.Context, properties *StreamProperties) (*CreateStreamResponse, error) {
 	payload := struct {
 		Properties *StreamProperties `json:"properties" validate:"required,lte=32,dive,keys,gt=0,lte=64,endkeys,max=128,required"`
 	}{Properties: properties}
@@ -21,12 +21,12 @@ func (c *MinistreamClient) CreateStream(ctx context.Context, properties *StreamP
 
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(data))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -39,32 +39,32 @@ func (c *MinistreamClient) CreateStream(ctx context.Context, properties *StreamP
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if resp.StatusCode != 201 {
 		var e APIError
 		if resp.Header.Get("Content-type") == "application/json" {
 			if err := json.Unmarshal(body, &e); err != nil {
-				return nil, nil, fmt.Errorf(ErrorCannotUnmarshalJson)
+				return nil, fmt.Errorf(ErrorCannotUnmarshalJson)
 			} else {
-				return nil, &e, nil
+				return nil, &e
 			}
 		}
-		return nil, nil, fmt.Errorf(string(body))
+		return nil, fmt.Errorf(string(body))
 	}
 
 	var result CreateStreamResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, nil, fmt.Errorf(ErrorCannotUnmarshalJson)
+		return nil, fmt.Errorf(ErrorCannotUnmarshalJson)
 	} else {
-		return &result, nil, nil
+		return &result, nil
 	}
 }

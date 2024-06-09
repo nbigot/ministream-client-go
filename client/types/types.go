@@ -1,6 +1,8 @@
 package types
 
 import (
+	"context"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +15,7 @@ type StreamIteratorUUID = uuid.UUID
 type StreamProperties = map[string]interface{}
 
 type APIError struct {
+	// implementation of error interface
 	Message          string             `json:"error,omitempty"`            // application-level error message, for debugging
 	Details          string             `json:"details,omitempty"`          // application-level error details that best describes the error, for debugging
 	Code             int                `json:"code"`                       // application-specific error code
@@ -81,4 +84,17 @@ type PutRecordsResponse struct {
 	Count      int64         `json:"count"`
 	StreamUUID StreamUUID    `json:"streamUUID"`
 	MessageIds []MessageId   `json:"messageIds"`
+}
+
+type ResponseRecordEnvelope struct {
+	Id           MessageId   `json:"i"`
+	CreationDate time.Time   `json:"d"`
+	Msg          interface{} `json:"m"`
+}
+
+type IProducerClient interface {
+	Reconnect() *APIError
+	Disconnect()
+	Authenticate(ctx context.Context) *APIError
+	PutRecords(ctx context.Context, streamUUID uuid.UUID, batchId int, records []interface{}) (*PutRecordsResponse, *http.Response, *APIError)
 }
